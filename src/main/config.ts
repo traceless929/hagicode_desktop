@@ -32,7 +32,7 @@ export class ConfigManager {
   constructor() {
     this.store = new Store<AppConfig>({
       defaults: defaultConfig,
-      name: 'hagico-desktop-config',
+      name: 'hagicode-desktop-config',
     });
   }
 

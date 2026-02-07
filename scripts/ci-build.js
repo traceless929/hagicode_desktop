@@ -7,7 +7,7 @@
  * detailed logging and build status reporting for CI environments.
  *
  * Usage:
- *   node client/scripts/ci-build.js [options]
+ *   node scripts/ci-build.js [options]
  *
  * Options:
  *   --platform <win|mac|linux>   Target platform
@@ -15,9 +15,9 @@
  *   --help                        Show help message
  */
 
-const { spawn } = require('child_process');
-const fs = require('fs');
-const path = require('path');
+import { spawn } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -114,7 +114,7 @@ function printBanner() {
  */
 function showHelp() {
   console.log(`
-Usage: node client/scripts/ci-build.js [options]
+Usage: node scripts/ci-build.js [options]
 
 Options:
   --platform <win|mac|linux>   Target platform
@@ -335,20 +335,15 @@ async function main() {
   logCI('Starting CI build process...', 'info');
 
   try {
-    // Build using the unified build script
-    const buildArgs = ['scripts/build.sh'];
+    // Build for production
+    const buildCmd = config.platform === 'win' ? 'npm run build:win' :
+                     config.platform === 'mac' ? 'npm run build:mac' :
+                     'npm run build:linux';
 
-    if (config.platform) {
-      buildArgs.push('--platform', config.platform);
-    }
-    if (config.prod) {
-      buildArgs.push('--prod');
-    }
+    logCI(`Executing: ${buildCmd}`, 'info');
 
-    logCI(`Executing: ${buildArgs.join(' ')}`, 'info');
-
-    await executeCommand('bash', buildArgs, {
-      cwd: path.join(process.cwd(), '..'),
+    await executeCommand('npm', ['run', `build:${config.platform}`], {
+      cwd: process.cwd(),
     });
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
