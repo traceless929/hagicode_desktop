@@ -89,9 +89,9 @@ test('dist directory exists', () => {
   assert(exists, 'dist directory exists');
 
   if (exists) {
-    const mainJs = path.join(distPath, 'main.js');
+    const mainJs = path.join(distPath, 'main', 'main.js');
     const rendererPath = path.join(distPath, 'renderer');
-    logVerbose(`dist/main.js exists: ${fs.existsSync(mainJs)}`);
+    logVerbose(`dist/main/main.js exists: ${fs.existsSync(mainJs)}`);
     logVerbose(`dist/renderer exists: ${fs.existsSync(rendererPath)}`);
   }
 });
@@ -100,9 +100,9 @@ test('dist directory exists', () => {
  * Test: Check if main process files are built
  */
 test('main process files exist', () => {
-  const mainJs = path.join(process.cwd(), 'dist', 'main.js');
+  const mainJs = path.join(process.cwd(), 'dist', 'main', 'main.js');
   const exists = fs.existsSync(mainJs);
-  assert(exists, 'dist/main.js exists');
+  assert(exists, 'dist/main/main.js exists');
 
   if (exists) {
     const stats = fs.statSync(mainJs);
@@ -154,7 +154,7 @@ test('package.json is valid', () => {
     const content = fs.readFileSync(pkgPath, 'utf8');
     const pkg = JSON.parse(content);
     assert(pkg.name && pkg.version, 'package.json has name and version');
-    assert(pkg.main === 'dist/main.js', 'package.json main points to dist/main.js');
+    assert(pkg.main === 'dist/main/main.js', 'package.json main points to dist/main/main.js');
     logVerbose(`name: ${pkg.name}, version: ${pkg.version}`);
   } catch (error) {
     assert(false, `package.json is valid JSON: ${error.message}`);
@@ -165,7 +165,7 @@ test('package.json is valid', () => {
  * Test: Check if main.js is non-empty
  */
 test('main.js has content', () => {
-  const mainJs = path.join(process.cwd(), 'dist', 'main.js');
+  const mainJs = path.join(process.cwd(), 'dist', 'main', 'main.js');
 
   if (!fs.existsSync(mainJs)) {
     log('  ⊘ Skipping: main.js does not exist', colors.yellow);
