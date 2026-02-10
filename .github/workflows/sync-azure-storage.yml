@@ -218,6 +218,8 @@ jobs:
           echo "Summary:"
           echo "$INDEX_JSON" | jq -r '.versions | length' | xargs -I {} echo "  - {} version(s)"
           echo "$INDEX_JSON" | jq -r '.versions[].files | length' | paste -sd+ | bc | xargs -I {} echo "  - {} file(s) total"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify upload
         if: success()
