@@ -21,7 +21,6 @@ win:
     - nsis
     - appx
   icon: resources/icon.ico
-
 appx:
   displayName: Hagicode Desktop
   publisherDisplayName: newbe36524
