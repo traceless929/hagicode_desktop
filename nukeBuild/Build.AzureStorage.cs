@@ -139,7 +139,7 @@ public partial class Build
         {
             Log.Information("=== 步骤 2: 上传到 Azure Blob ===");
 
-            var adapter = new AzureBlobAdapter(RootDirectory);
+            var adapter = new AzureBlobAdapter(RootDirectory, ChannelMapping);
 
             if (!await adapter.ValidateSasUrlAsync(AzureBlobSasUrl))
             {
@@ -164,6 +164,10 @@ public partial class Build
 
             Log.Information("✅ 构建产物已上传");
             Log.Information("  上传文件数: {Count}", result.UploadedBlobs.Count);
+            if (result.SkippedBlobs.Count > 0)
+            {
+                Log.Information("  跳过文件数: {Count} (已存在且哈希一致)", result.SkippedBlobs.Count);
+            }
         }
         else
         {
@@ -174,7 +178,7 @@ public partial class Build
         {
             Log.Information("=== 步骤 3: 生成并上传 index.json ===");
 
-            var adapter = new AzureBlobAdapter(RootDirectory);
+            var adapter = new AzureBlobAdapter(RootDirectory, ChannelMapping);
 
             if (!await adapter.ValidateSasUrlAsync(AzureBlobSasUrl))
             {
