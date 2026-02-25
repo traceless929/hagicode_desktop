@@ -11,6 +11,7 @@ import { PCodeWebServiceManager, type ProcessInfo, type WebServiceConfig } from 
 import { DependencyManager, type DependencyCheckResult, DependencyType } from './dependency-manager.js';
 import { MenuManager } from './menu-manager.js';
 import { RegionDetector } from './region-detector.js';
+import { LlmInstallationManager } from './llm-installation-manager.js';
 import { VersionManager } from './version-manager.js';
 import { PackageSourceConfigManager } from './package-source-config-manager.js';
 import { LicenseManager } from './license-manager.js';
@@ -18,6 +19,9 @@ import { OnboardingManager } from './onboarding-manager.js';
 import { manifestReader } from './manifest-reader.js';
 import { RSSFeedManager, DEFAULT_RSS_FEED_URL } from './rss-feed-manager.js';
 import type { RSSFeedItem } from './types/rss-types.js';
+import { ClaudeConfigManager } from './claude-config-manager.js';
+import type { ClaudeProvider } from '../types/claude-config.js';
+import { initializePresetServices, getPresetLoader, presetFetchHandler, presetRefreshHandler, presetClearCacheHandler, presetGetProviderHandler, presetGetAllProvidersHandler, presetGetCacheStatsHandler } from '../ipc/handlers/preset-handlers.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -77,9 +81,11 @@ let packageSourceConfigManager: PackageSourceConfigManager | null = null;
 let webServicePollingInterval: NodeJS.Timeout | null = null;
 let menuManager: MenuManager | null = null;
 let regionDetector: RegionDetector | null = null;
+let llmInstallationManager: LlmInstallationManager | null = null;
 let licenseManager: LicenseManager | null = null;
 let onboardingManager: OnboardingManager | null = null;
 let rssFeedManager: RSSFeedManager | null = null;
+let claudeConfigManager: ClaudeConfigManager | null = null;
 
 function createWindow(): void {
   console.log('[Hagicode] Creating window...');
@@ -354,37 +360,9 @@ ipcMain.handle('start-web-service', async (_, force?: boolean) => {
       };
     }
 
-    // Check version status for warning (non-blocking)
-    const missingDependencies: DependencyCheckResult[] = [];
-    if (activeVersion.status !== 'installed-ready' && !force) {
-      log.warn('[Main] Active version is not ready:', activeVersion.status);
-
-      // Collect missing dependencies for the warning
-      if (activeVersion.dependencies) {
-        for (const dep of activeVersion.dependencies) {
-          if (!dep.installed || dep.versionMismatch) {
-            missingDependencies.push(dep);
-          }
-        }
-      }
-
-      // Return warning to frontend for confirmation dialog
-      return {
-        success: false,
-        warning: {
-          type: 'missing-dependencies',
-          missing: missingDependencies
-        }
-      };
-    }
-
-    // Log dependency status for audit
-    if (missingDependencies.length > 0) {
-      log.info('[Main] Starting service with missing dependencies:', {
-        missingCount: missingDependencies.length,
-        dependencies: missingDependencies.map(d => ({ name: d.name, type: d.type, installed: d.installed }))
-      });
-    }
+    // No blocking principle: don't check dependency status before starting
+    // Users confirm via dialog, not via status check
+    // The service will handle missing dependencies at runtime
 
     // Set the active version path in web service manager
     webServiceManager.setActiveVersion(activeVersion.id);
@@ -1322,6 +1300,111 @@ ipcMain.handle('region:redetect', async () => {
   }
 });
 
+// LLM Installation Manager IPC Handlers
+
+ipcMain.handle('llm:load-prompt', async (_event, manifestPath: string, region?: 'cn' | 'international') => {
+  if (!llmInstallationManager) {
+    return {
+      success: false,
+      error: 'LLM Installation Manager not initialized',
+    };
+  }
+  try {
+    const prompt = await llmInstallationManager.loadPrompt(manifestPath, region);
+    return {
+      success: true,
+      prompt: {
+        version: prompt.version,
+        content: prompt.content,
+        region: prompt.region,
+        filePath: prompt.filePath, // Include file path in response
+      },
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('[Main] Failed to load LLM prompt:', errorMessage);
+    return {
+      success: false,
+      error: errorMessage,
+    };
+  }
+});
+
+ipcMain.handle('llm:call-api', async (event, manifestPath: string, region?: 'cn' | 'international') => {
+  if (!llmInstallationManager) {
+    return {
+      success: false,
+      error: 'LLM Installation Manager not initialized',
+    };
+  }
+  try {
+    // Load the prompt with the specified region (or auto-detect if not provided)
+    const prompt = await llmInstallationManager.loadPrompt(manifestPath, region);
+
+    // Call Claude API with the loaded prompt file path
+    const result = await llmInstallationManager.callClaudeAPI(prompt.filePath, event.sender);
+    return result;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('[Main] Failed to call LLM API:', errorMessage);
+    return {
+      success: false,
+      error: errorMessage,
+    };
+  }
+});
+
+ipcMain.handle('llm:detect-config', async () => {
+  if (!llmInstallationManager) {
+    return {
+      exists: false,
+      source: 'none',
+      error: 'LLM Installation Manager not initialized',
+    };
+  }
+  try {
+    const config = await llmInstallationManager.detectClaudeConfig();
+    return config;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('[Main] Failed to detect Claude config:', errorMessage);
+    return {
+      exists: false,
+      source: 'none',
+      error: errorMessage,
+    };
+  }
+});
+
+ipcMain.handle('llm:get-region', async () => {
+  if (!llmInstallationManager) {
+    return { region: null };
+  }
+  return {
+    region: llmInstallationManager.getRegion(),
+  };
+});
+
+ipcMain.handle('llm:get-manifest-path', async (_event, versionId: string) => {
+  try {
+    const pathManager = (await import('./path-manager.js')).PathManager.getInstance();
+    const versionPath = pathManager.getInstalledVersionPath(versionId);
+    const manifestPath = `${versionPath}/manifest.json`;
+    console.log('[Main] Getting manifest path for version:', versionId, '->', manifestPath);
+    return {
+      success: true,
+      manifestPath,
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('[Main] Failed to get manifest path:', errorMessage);
+    return {
+      success: false,
+      error: errorMessage,
+    };
+  }
+});
+
 // Web service status change handler for menu updates
 ipcMain.on('web-service-status-for-menu', async (_event, status: ProcessInfo) => {
   if (menuManager) {
@@ -1348,30 +1431,6 @@ ipcMain.handle('open-external', async (_event, url: string) => {
       return {
         success: false,
         error: 'Invalid URL protocol'
-      };
-    }
-
-    // URL whitelist validation
-    const allowedDomains = [
-      'localhost',
-      '127.0.0.1',
-      '0.0.0.0',
-      'hagicode.com',
-      'docs.hagicode.com',
-      'qq.com',
-      'github.com',
-      'qm.qq.com'
-    ];
-
-    const isAllowed = allowedDomains.some(domain =>
-      parsedUrl.hostname === domain ||
-      parsedUrl.hostname.endsWith('.' + domain)
-    );
-
-    if (!isAllowed) {
-      return {
-        success: false,
-        error: 'Domain not allowed'
       };
     }
 
@@ -1775,6 +1834,164 @@ ipcMain.handle('onboarding:reset', async () => {
   }
 });
 
+// Claude Config IPC Handlers
+ipcMain.handle('claude:detect', async () => {
+  if (!claudeConfigManager) {
+    return {
+      exists: false,
+      source: 'none',
+      error: 'Claude Config Manager not initialized'
+    };
+  }
+  try {
+    return await claudeConfigManager.detectExistingConfig();
+  } catch (error) {
+    console.error('Failed to detect Claude config:', error);
+    return {
+      exists: false,
+      source: 'none',
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+});
+
+ipcMain.handle('claude:validate', async (_, provider: string, apiKey: string, endpoint?: string) => {
+  if (!claudeConfigManager) {
+    return {
+      success: false,
+      error: 'Claude Config Manager not initialized'
+    };
+  }
+  try {
+    return await claudeConfigManager.validateApiKey(provider as ClaudeProvider, apiKey, endpoint);
+  } catch (error) {
+    console.error('Failed to validate Claude API key:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+});
+
+ipcMain.handle('claude:verify-cli', async () => {
+  if (!claudeConfigManager) {
+    return {
+      installed: false,
+      error: 'Claude Config Manager not initialized'
+    };
+  }
+  try {
+    return await claudeConfigManager.verifyCliInstallation();
+  } catch (error) {
+    console.error('Failed to verify Claude CLI:', error);
+    return {
+      installed: false,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+});
+
+ipcMain.handle('claude:save', async (_, config: any) => {
+  if (!claudeConfigManager) {
+    return {
+      success: false,
+      error: 'Claude Config Manager not initialized'
+    };
+  }
+  try {
+    return await claudeConfigManager.saveConfig(config);
+  } catch (error) {
+    console.error('Failed to save Claude config:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+});
+
+ipcMain.handle('claude:get-stored', async () => {
+  if (!claudeConfigManager) {
+    return null;
+  }
+  try {
+    return claudeConfigManager.getStoredConfig();
+  } catch (error) {
+    console.error('Failed to get stored Claude config:', error);
+    return null;
+  }
+});
+
+ipcMain.handle('claude:delete', async () => {
+  if (!claudeConfigManager) {
+    return { success: false, error: 'Claude Config Manager not initialized' };
+  }
+  try {
+    claudeConfigManager.deleteStoredConfig();
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to delete Claude config:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+});
+
+ipcMain.handle('claude:test', async () => {
+  if (!claudeConfigManager) {
+    return { success: false, error: 'Claude Config Manager not initialized' };
+  }
+  try {
+    return await claudeConfigManager.testConfiguration();
+  } catch (error) {
+    console.error('Failed to test Claude config:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+});
+
+ipcMain.handle('claude:list-backups', async () => {
+  if (!claudeConfigManager) {
+    return { success: false, error: 'Claude Config Manager not initialized', backups: [] };
+  }
+  try {
+    const backups = await claudeConfigManager.listBackups();
+    return { success: true, backups };
+  } catch (error) {
+    console.error('Failed to list Claude config backups:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+      backups: []
+    };
+  }
+});
+
+ipcMain.handle('claude:restore-backup', async (_, backupPath: string) => {
+  if (!claudeConfigManager) {
+    return { success: false, error: 'Claude Config Manager not initialized' };
+  }
+  try {
+    return await claudeConfigManager.restoreFromBackup(backupPath);
+  } catch (error) {
+    console.error('Failed to restore Claude config from backup:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+});
+
+// Preset Management IPC Handlers
+ipcMain.handle('preset:fetch', presetFetchHandler);
+ipcMain.handle('preset:refresh', presetRefreshHandler);
+ipcMain.handle('preset:clear-cache', presetClearCacheHandler);
+ipcMain.handle('preset:get-provider', presetGetProviderHandler);
+ipcMain.handle('preset:get-all-providers', presetGetAllProvidersHandler);
+ipcMain.handle('preset:get-cache-stats', presetGetCacheStatsHandler);
+
 // Debug Mode IPC Handlers
 ipcMain.handle('set-debug-mode', async (_, mode: { ignoreDependencyCheck: boolean }) => {
   try {
@@ -1921,6 +2138,9 @@ app.whenReady().then(async () => {
   const detection = regionDetector.detectWithCache();
   console.log(`[App] Region detected: ${detection.region} (method: ${detection.method})`);
 
+  // Initialize LLM Installation Manager (after ClaudeConfigManager is initialized later)
+  // Will be properly initialized after ClaudeConfigManager
+
   // Initialize Web Service Manager
   const webServiceConfig: WebServiceConfig = {
     host: 'localhost',
@@ -1953,6 +2173,25 @@ app.whenReady().then(async () => {
     );
     log.info('[App] Onboarding Manager initialized');
   }
+
+  // Initialize Preset Services first (before ClaudeConfigManager)
+  initializePresetServices();
+  log.info('[App] Preset services initialized');
+
+  // Initialize Claude Config Manager with PresetLoader
+  const presetLoader = getPresetLoader();
+  claudeConfigManager = new ClaudeConfigManager(
+    configManager.getStore() as unknown as Store<Record<string, unknown>>,
+    presetLoader || undefined
+  );
+  log.info('[App] Claude Config Manager initialized');
+
+  // Initialize LLM Installation Manager (after ClaudeConfigManager)
+  llmInstallationManager = new LlmInstallationManager(
+    regionDetector,
+    claudeConfigManager
+  );
+  log.info('[App] LLM Installation Manager initialized');
 
   // Initialize RSS Feed Manager
   rssFeedManager = RSSFeedManager.getInstance(

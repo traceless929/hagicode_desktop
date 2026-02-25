@@ -7,9 +7,10 @@
  */
 export enum OnboardingStep {
   Welcome = 0,
-  Download = 1,
-  Dependencies = 2,
-  Launch = 3,
+  ClaudeConfig = 1,
+  Download = 2,
+  LlmInstallation = 3,
+  Launch = 4,
 }
 
 /**
